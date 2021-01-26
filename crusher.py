@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 #-*-encoding:utf-8-*-
 
-# d3f3c4t3: convert C/ASM/Binary program to shellcode
-# by okb
+# CodeCrusher: convert C/ASM/Binary program to shellcode
+# by Yir
 
 from __future__ import print_function
 import argparse
