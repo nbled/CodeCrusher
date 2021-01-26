@@ -5,10 +5,13 @@
 # by Yir
 
 from __future__ import print_function
+import subprocess
 import argparse
 import time
 import sys
 import os
+
+DEVNULL = open(os.devnull, "wb")
 
 class ObjdumpParser:
 	""" Parse objdump result """
@@ -33,6 +36,43 @@ class ObjdumpParser:
 				function = identifier[identifier.index("<")+1:identifier.index(">")]
 				self.functions[function] = ""
 
+def file_type(path):
+	""" Return file type """
+	return os.popen("file {path}".format(path=path)).read().split(":")[1].strip()
+
+def detect(compiler):
+	""" Check if compiler exists """
+	env = os.getenv("PATH") + ":{pwd}/".format(pwd=os.getcwd())
+	for directory in env.split(":"):
+		if os.path.exists(os.path.join(directory, compiler)):
+			return True
+	return False
+
+def objdump(path):
+	""" Run objdump """
+	return os.popen("objdump -D {path}".format(path=path)).read()
+
+def build(compiler, path, options):
+	""" Compile source """
+	tmp = "build.{ts}.out".format(ts=time.time())
+	subprocess.Popen(
+		"{compiler} {options} -o {path_1} {path_2}".format(
+			compiler=compiler, options=options, path_1=tmp, path_2=path
+		),
+		shell=True,
+		stdout=subprocess.PIPE,
+		stderr=DEVNULL
+	).communicate()
+	return tmp
+
+def build_assembly(compiler, path, options):
+	""" Compile Assembly source """
+	tmp = build(compiler, path, options)
+	if compiler == "gcc":
+		return tmp+".elf"	
+	os.popen("ld -o {result} {tmp}".format(result=tmp+".elf", tmp=tmp))
+	return tmp+".elf"
+
 def build_parser():
 	""" Build argument parser """
 	parser = argparse.ArgumentParser(description="Convert C/ASM/Binary program to shellcode")
@@ -41,7 +81,7 @@ def build_parser():
 		help="path to C program")
 	parser.add_argument("-f", "--function", 
 		type=str, default="main",
-		help="select function to convert (all functions are converted by default)")
+		help="select function to convert (main function is converted by default)")
 	parser.add_argument("-i", "--input-format",
 		type=int, default=0, choices=[0, 1, 2],
 		help="select input format (0: C source 1: Assembly source 2: Raw binary) (default: 0)")
@@ -64,36 +104,6 @@ def build_parser():
 		action="store_true",
 		help="embed C char array into shellcode executer program")
 	return parser
-
-def file_type(path):
-	""" Return file type """
-	return os.popen("file {path}".format(path=path)).read().split(":")[1].strip()
-
-def detect(compiler):
-	""" Check if compiler exists """
-	env = os.getenv("PATH") + ":{pwd}/".format(pwd=os.getcwd())
-	for directory in env.split(":"):
-		if os.path.exists(os.path.join(directory, compiler)):
-			return True
-	return False
-
-def objdump(path):
-	""" Run objdump """
-	return os.popen("objdump -D {path}".format(path=path)).read()
-
-def build(compiler, path, options):
-	""" Compile source """
-	tmp = "build.{ts}.out".format(ts=time.time())
-	os.popen("{compiler} {options} -o {path_1} {path_2}".format(compiler=compiler, options=options, path_1=tmp, path_2=path))
-	return tmp
-
-def build_assembly(compiler, path, options):
-	""" Compile Assembly source """
-	tmp = build(compiler, path, options)
-	if compiler == "gcc":
-		return tmp+".elf"	
-	os.popen("ld -o {result} {tmp}".format(result=tmp+".elf", tmp=tmp))
-	return tmp+".elf"
 
 def error(prompt):
 	""" Print error and quit """
@@ -119,6 +129,9 @@ elif args.input_format == 2 and "ELF" in file_type(args.file):
 else:
 	error("file type detection and input format doesnt match")
 
+if not os.path.exists(output):
+	error("failed to build the target program")
+
 dump = objdump(output)
 
 if args.input_format != 2:
@@ -128,23 +141,30 @@ if args.input_format != 2:
 o_parser = ObjdumpParser(dump)
 o_parser.run()
 
-if not args.function in o_parser.functions.keys():
+if not args.function in o_parser.functions.keys() and args.function != "*":
 	error("{function} function not detected".format(function=args.function))
 
 # Format result
 if args.output_format == 0:
-	result = "char {var}[] = ".format(var=args.variable) + "{"
+	result = "char {var}[] = ".format(var=args.variable) + "\""
 else:
 	result = ""
-for character in o_parser.functions[args.function]:
-	if args.output_format == 0:
-		result = result + hex(ord(character)) + ","
-	elif args.output_format == 1:
-		result += format(ord(character), "02x")
-	else:
-		result += character
+
+if args.function == "*":
+	functions = o_parser.functions.keys()
+else:
+	functions = [args.function]
+for function in functions:
+	for character in o_parser.functions[function]:
+		if args.output_format == 0:
+			#result = result + hex(ord(character)) + ","
+			result += "\\x{h}".format(h=format(ord(character), "02x"))
+		elif args.output_format == 1:
+			result += format(ord(character), "02x")
+		else:
+			result += character
 if args.output_format == 0:
-	result = result[:-1] + "}"
+	result += "\";"
 result += "\n"
 
 # Embed array
@@ -157,6 +177,6 @@ if args.embed:
 
 # Write result to output
 with open(args.output, "wb") as handler:
-	handler.write(result)
+	handler.write(result.encode())
 
 
